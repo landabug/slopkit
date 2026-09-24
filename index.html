@@ -5,36 +5,28 @@
 <title>PS5</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-    body{
-        user-select:none; -webkit-user-select:none;
-        background-color:#0c0c0f; color:#fff; font-family:Arial;
-        display:flex; flex-direction:column; align-items:center; justify-content:center;
-        min-height:100vh; margin:0; padding:24px 16px; box-sizing:border-box;
-        text-align:center;
-    }
-    #cat{
-        width:240px; max-width:66vw; border-radius:10px; margin-bottom:22px;
-        box-shadow:0 0 0 2px #2a2a2e, 0 0 20px 4px #2a2a2e;
-    }
-    p.sub{
-        font-size:12.5px; color:#8a8a92; margin:0 0 22px 0;
-        letter-spacing:1px; max-width:22rem;
-    }
-    .btn{
-        padding:1rem 2rem; text-align:center; cursor:pointer;
-        min-width:12rem; border-radius:1.25rem; background-color:#202125;
-        border:none; color:#fff; font-size:1.5rem; font-weight:800;
-        transition:background-color 0.25s ease; font-family:inherit;
-    }
-    .btn:hover{ background-color:#a2a2a6; color:#202020; }
-    .btn.disabled{ opacity:0.4; pointer-events:none; }
-    #msg{ color:#888; font-size:0.8rem; margin-top:14px; min-height:1em; }
+body{
+    user-select:none; -webkit-user-select:none;
+    background-color:#0c0c0f; color:#fff; font-family:Arial;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    height:100vh; margin:0; padding:0; overflow:hidden; box-sizing:border-box;
+}
+#cat{ width:240px; max-width:66vw; border-radius:10px; margin-bottom:26px;
+      box-shadow:0 0 0 2px #2a2a2e, 0 0 20px 4px #2a2a2e; }
+.btn{
+    padding:1rem 2rem; text-align:center; cursor:pointer;
+    min-width:12rem; border-radius:1.25rem; background-color:#202125;
+    border:none; color:#fff; font-size:1.5rem; font-weight:800;
+    transition:background-color 0.25s ease;
+}
+.btn:hover{ background-color:#a2a2a6; color:#202020; }
+.btn.disabled{ opacity:0.4; pointer-events:none; }
+#msg{ color:#888; font-size:0.8rem; margin-top:14px; min-height:1em; }
 </style>
 </head>
 <body>
 <img id="cat" src="cat.jpg" alt="">
-<p class="sub">Semi-jailbreak for PS5 firmware 13.60 and below</p>
-<a tabindex="0" class="btn disabled" id="run">Jailbreak</a>
+<a tabindex="0" class="btn disabled" id="run">Run Exploit</a>
 <div id="msg"></div>
 
 <script>
@@ -55,6 +47,9 @@ function fwNum(s) {
     return parseInt(p[0], 10) * 100 + parseInt(p[1], 10);
 }
 
+// Nearest known firmware within the SAME major. Offsets are usually stable
+// across a major; if the build shifted, the kernel-base cross-check fails safe
+// (it simply won't fire rather than crashing).
 function nearest(data, target) {
     const want = fwNum(target);
     const maj = target.split(".")[0];
@@ -89,7 +84,7 @@ fetch(OFFSETS_URL, { cache: "no-store" })
         msg.textContent = "failed to load offsets";
     });
 
-function launch() {
+run.addEventListener("click", function () {
     if (!entry) return;
     const q = new URLSearchParams();
     q.set("go", "1");
@@ -104,14 +99,6 @@ function launch() {
     q.set("ers", entry.ers);
     q.set("ere", entry.ere);
     location.href = `${EXPLOIT_URL}?${q.toString()}`;
-}
-
-run.addEventListener("click", launch);
-document.addEventListener("keydown", function (e) {
-    if ((e.key === "Enter" || e.key === " ") &&
-        !run.classList.contains("disabled")) {
-        launch();
-    }
 });
 </script>
 </body>
