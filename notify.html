@@ -510,21 +510,6 @@ function inPS5UserModuleBand(value) {
     return value >= 0x800000000 && value < 0x900000000;
 }
 
-function classifyImportedFunction(value, exportOffset, providerTextSize) {
-    if (value === 0)
-        return 3;
-    if (value >= webkitBase && value < webkitBase + WEBKIT_TEXT_SIZE)
-        return 2;
-    const providerBase = value - exportOffset;
-    if (inPS5UserModuleBand(providerBase)
-        && providerBase % 0x4000 === 0
-        && providerBase !== webkitBase
-        && value >= providerBase
-        && value < providerBase + providerTextSize)
-        return 1;
-    return 0;
-}
-
 function importStatusName(status) {
     if (status === 1)
         return "RESOLVED";
@@ -1604,60 +1589,24 @@ function sendNotification(msg) {
 }
 
 function sendNotificationSequence() {
-    const now = new Date();
-    const dateStr = now.getFullYear() + "-" +
-        String(now.getMonth() + 1).padStart(2, "0") + "-" +
-        String(now.getDate()).padStart(2, "0") + " " +
-        String(now.getHours()).padStart(2, "0") + ":" +
-        String(now.getMinutes()).padStart(2, "0") + ":" +
-        String(now.getSeconds()).padStart(2, "0");
-
-    const pid = 0x1337;
-    const ppid = 0x4242;
-    const ebootBase = webkitBase;
-    const libcBasePlaceholder = webkitBase + 0x100000;
-    const libkernelBase = kernelBase;
-
-    const debugMessages = [
-        "hwPS slopkit v0.1",
-        "timestamp: " + dateStr,
-        "platform: Web (PS5) (" + FW_LABEL + ")",
-        "pid: " + pid + " ppid: " + ppid,
-        "eboot base @ " + hex(ebootBase),
-        "libc base @ " + hex(libcBasePlaceholder),
-        "libkernel base @ " + hex(libkernelBase),
-        "PoC Sandbox Escape"
-    ];
-
-    for (let i = 0; i < debugMessages.length; i++) {
-        try {
-            const success = sendNotification(debugMessages[i]);
-            mark("NOTIFY-SEQ", `msg${i}: ${debugMessages[i].slice(0, 30)}... success=${success}`);
-        } catch (e) {
-            mark("NOTIFY-SEQ-ERR", `msg${i}: ${e.message}`);
-        }
+    try {
+        sendNotification("Jailbreak Successful!");
+        mark("NOTIFY-SEQ", "Jailbreak Successful!");
+    } catch (e) {
+        mark("NOTIFY-SEQ-ERR", "Jailbreak Successful!: " + e.message);
     }
 
     setTimeout(function () {
         try {
-            sendNotification("Jailbreak Successful!");
-            mark("NOTIFY-SEQ", "Jailbreak Successful!");
+            sendNotification("Loading Payload Manager..");
+            mark("NOTIFY-SEQ", "Loading Payload Manager..");
         } catch (e) {
-            mark("NOTIFY-SEQ-ERR", "Jailbreak Successful!: " + e.message);
+            mark("NOTIFY-SEQ-ERR", "Loading Payload Manager..: " + e.message);
         }
 
         setTimeout(function () {
-            try {
-                sendNotification("Loading Payload Manager..");
-                mark("NOTIFY-SEQ", "Loading Payload Manager..");
-            } catch (e) {
-                mark("NOTIFY-SEQ-ERR", "Loading Payload Manager..: " + e.message);
-            }
-
-            setTimeout(function () {
-                location.href = "payloads.html";
-            }, 900);
-        }, 500);
+            location.href = "payloads.html";
+        }, 900);
     }, 500);
 }
 
